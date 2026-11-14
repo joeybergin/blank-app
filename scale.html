@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --line: #2a2f3a; --text: #e8eaf0;
+    --muted: #8b93a7; --accent: #4fd1c5; --warn: #f6ad55; --bad: #fc8181; --good: #68d391;
+  }
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 12px; }
+  .display { background: #0a0c0f; border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; text-align: right; position: relative; }
+  .reading { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: clamp(44px, 14vw, 72px); font-variant-numeric: tabular-nums; line-height: 1.05;
+    color: var(--accent); letter-spacing: -1px; }
+  .reading .unit { font-size: 0.4em; color: var(--muted); margin-left: 6px; }
+  .status { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--line); margin-right: 5px; vertical-align: middle; }
+  .dot.on { background: var(--good); }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button, select { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 8px; font-size: 15px; font-weight: 600; }
+  button:active { background: var(--line); }
+  button.primary { background: var(--accent); color: #062a27; border-color: var(--accent); }
+  .pad { margin-top: 10px; height: 300px; border-radius: 16px; border: 2px dashed var(--line);
+    background: radial-gradient(circle at center, #1b2029 0%, #12151b 70%);
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    color: var(--muted); font-size: 14px; touch-action: none; position: relative; overflow: hidden; }
+  .pad.active { border-color: var(--accent); border-style: solid; }
+  .pad .ring { position: absolute; border: 2px solid var(--accent); border-radius: 50%;
+    pointer-events: none; transform: translate(-50%, -50%); opacity: .7; }
+  .banner { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; display: none; }
+  .banner.show { display: block; }
+  .banner.warn { background: #3a2a14; color: var(--warn); border: 1px solid #5c4320; }
+  .banner.info { background: #12302d; color: var(--accent); border: 1px solid #1f4f4a; }
+  .meta { font-size: 11px; color: var(--muted); margin-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .sim { margin-top: 10px; display: none; }
+  .sim.show { display: block; }
+  .sim input { width: 100%; }
+  label.chk { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="display">
+    <div class="reading"><span id="value">----</span><span class="unit" id="unitLabel">g</span></div>
+    <div class="status">
+      <span><span class="dot" id="stableDot"></span><span id="stableText">No load</span></span>
+      <span id="calText">Not calibrated</span>
+    </div>
+  </div>
+
+  <div class="row">
+    <button class="primary" id="tareBtn">TARE</button>
+    <button id="calBtn">CALIBRATE</button>
+    <select id="unitSel" aria-label="Unit">
+      <option value="g">g</option>
+      <option value="oz">oz</option>
+      <option value="ct">ct</option>
+      <option value="gr">gr</option>
+    </select>
+  </div>
+
+  <div class="banner info" id="calBanner"></div>
+  <div class="banner warn" id="supportBanner"></div>
+
+  <div class="pad" id="pad">
+    <div id="padText">Place a conductive carrier here<br>(e.g. a metal spoon or coin), then TARE</div>
+  </div>
+
+  <div class="sim" id="simBox">
+    <div class="meta">Simulated pressure (for testing without a pressure-sensing screen)</div>
+    <input type="range" id="simRange" min="0" max="1" step="0.0005" value="0">
+  </div>
+  <label class="chk"><input type="checkbox" id="simChk"> Simulation mode</label>
+
+  <div class="meta" id="rawText">raw force: –</div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const UNITS = { g: 1, oz: 1 / 28.349523125, ct: 5, gr: 15.4323583529 };
+  const STORE_KEY = "screen-scale-v1";
+
+  // ---- state ----
+  let calPoints = [];        // [{raw, grams}] sorted by raw
+  let tareGrams = 0;
+  let unit = "g";
+  let rawNow = null;         // smoothed raw force, null when nothing touching
+  let history = [];          // recent raw samples for stability
+  let sawRealForce = false;  // any value strictly between 0 and 1, or >1
+  let forceSamples = 0;
+  let simMode = false;
+  let calStep = 0;           // 0 = idle, 1 = waiting zero, 2 = waiting reference
+  let calRefGrams = 5.0;
+
+  // ---- persistence (best-effort) ----
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ calPoints, unit })); } catch (e) {}
+  }
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+      if (s) { calPoints = s.calPoints || []; unit = s.unit || "g"; }
+    } catch (e) {}
+  }
+
+  // ---- raw -> grams via piecewise-linear calibration curve ----
+  function rawToGrams(raw) {
+    if (calPoints.length < 2) return null;
+    const p = calPoints;
+    let i = 0;
+    if (raw <= p[0].raw) i = 0;
+    else if (raw >= p[p.length - 1].raw) i = p.length - 2;
+    else while (i < p.length - 2 && raw > p[i + 1].raw) i++;
+    const a = p[i], b = p[i + 1];
+    const t = (raw - a.raw) / (b.raw - a.raw || 1e-9);
+    return a.grams + t * (b.grams - a.grams);
+  }
+
+  // ---- input handling ----
+  const pad = $("pad");
+  const rings = new Map();
+
+  function ingest(force) {
+    if (force == null) { rawNow = null; history = []; return; }
+    forceSamples++;
+    if ((force > 0 && force < 1) || force > 1) sawRealForce = true;
+    // exponential smoothing to tame sensor noise
+    rawNow = rawNow == null ? force : rawNow * 0.8 + force * 0.2;
+    history.push(rawNow);
+    if (history.length > 30) history.shift();
+  }
+
+  function handleTouches(e) {
+    e.preventDefault();
+    if (simMode) return;
+    const touches = e.touches;
+    pad.classList.toggle("active", touches.length > 0);
+    // draw contact rings
+    const seen = new Set();
+    const box = pad.getBoundingClientRect();
+    for (const t of touches) {
+      seen.add(t.identifier);
+      let r = rings.get(t.identifier);
+      if (!r) { r = document.createElement("div"); r.className = "ring"; pad.appendChild(r); rings.set(t.identifier, r); }
+      const d = 30 + (t.force || 0) * 60;
+      r.style.width = r.style.height = d + "px";
+      r.style.left = (t.clientX - box.left) + "px";
+      r.style.top = (t.clientY - box.top) + "px";
+    }
+    for (const [id, r] of rings) if (!seen.has(id)) { r.remove(); rings.delete(id); }
+
+    if (touches.length === 0) { ingest(null); return; }
+    let sum = 0;
+    for (const t of touches) sum += (typeof t.force === "number" ? t.force : 0);
+    ingest(sum);
+  }
+  ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(ev =>
+    pad.addEventListener(ev, handleTouches, { passive: false }));
+
+  // Safari on Mac with a Force Touch trackpad
+  pad.addEventListener("webkitmouseforcewillbegin", e => e.preventDefault());
+  pad.addEventListener("webkitmouseforcechanged", e => {
+    if (simMode) return;
+    sawRealForce = true;
+    pad.classList.add("active");
+    ingest(Math.max(0, e.webkitForce - 1)); // webkitForce is 1..3 while clicked
+  });
+  pad.addEventListener("mouseup", () => { if (!simMode) { pad.classList.remove("active"); ingest(null); } });
+
+  // Simulation mode
+  $("simChk").addEventListener("change", e => {
+    simMode = e.target.checked;
+    $("simBox").classList.toggle("show", simMode);
+    rawNow = null; history = [];
+    pad.classList.toggle("active", simMode);
+  });
+
+  // ---- capture helper: average raw over a window ----
+  function captureAverage(ms) {
+    return new Promise(resolve => {
+      const vals = [];
+      const iv = setInterval(() => { if (rawNow != null) vals.push(rawNow); }, 20);
+      setTimeout(() => {
+        clearInterval(iv);
+        resolve(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+      }, ms);
+    });
+  }
+
+  // ---- calibration flow ----
+  const calBanner = $("calBanner");
+  function showCal(html) { calBanner.innerHTML = html; calBanner.classList.toggle("show", !!html); }
+
+  $("calBtn").addEventListener("click", async () => {
+    if (calStep === 0) {
+      calStep = 1;
+      $("calBtn").textContent = "CAPTURE ZERO";
+      showCal("<b>Step 1/2:</b> Put only your carrier (spoon/coin) on the pad, keep still, then tap CAPTURE ZERO.");
+    } else if (calStep === 1) {
+      if (rawNow == null) { showCal("<b>Step 1/2:</b> Nothing detected on the pad — place the carrier first."); return; }
+      showCal("Measuring zero… keep still");
+      const z = await captureAverage(1500);
+      calPoints = [{ raw: z, grams: 0 }];
+      calStep = 2;
+      $("calBtn").textContent = "CAPTURE REF";
+      showCal(
+        "<b>Step 2/2:</b> Add a known weight on top of the carrier, choose it below, then tap CAPTURE REF.<br>" +
+        '<select id="refSel" style="margin-top:8px;width:100%">' +
+        '<option value="5.000">US nickel — 5.000 g</option>' +
+        '<option value="2.500">US penny (1983+) — 2.500 g</option>' +
+        '<option value="2.268">US dime — 2.268 g</option>' +
+        '<option value="5.670">US quarter — 5.670 g</option>' +
+        '<option value="7.500">1 € coin — 7.500 g</option>' +
+        '<option value="custom">Custom…</option></select>');
+      const sel = $("refSel");
+      sel.addEventListener("change", () => {
+        if (sel.value === "custom") {
+          const v = parseFloat(prompt("Reference weight in grams:", "10.00"));
+          if (v > 0) { const o = new Option(v.toFixed(3) + " g (custom)", String(v)); sel.add(o, sel.options.length - 1); sel.value = String(v); }
+          else sel.value = "5.000";
+        }
+      });
+    } else if (calStep === 2) {
+      calRefGrams = parseFloat(($("refSel") || {}).value || "5");
+      if (rawNow == null) { showCal("Nothing detected on the pad."); return; }
+      showCal("Measuring reference… keep still");
+      const r = await captureAverage(1500);
+      if (r == null || Math.abs(r - calPoints[0].raw) < 1e-4) {
+        calStep = 0; $("calBtn").textContent = "CALIBRATE";
+        showCal("Calibration failed: no change in pressure was detected. This screen may not sense force.");
+        return;
+      }
+      calPoints.push({ raw: r, grams: calRefGrams });
+      calPoints.sort((a, b) => a.raw - b.raw);
+      tareGrams = 0;
+      save();
+      calStep = 0; $("calBtn").textContent = "CALIBRATE";
+      showCal("Calibrated with " + calRefGrams.toFixed(3) + " g reference. Remove the reference weight, then TARE.");
+      setTimeout(() => showCal(""), 6000);
+    }
+  });
+
+  $("tareBtn").addEventListener("click", () => {
+    const g = rawNow == null ? null : rawToGrams(rawNow);
+    tareGrams = g == null ? 0 : g;
+  });
+
+  $("unitSel").addEventListener("change", e => { unit = e.target.value; save(); });
+
+  // ---- render loop ----
+  function render() {
+    if (simMode) ingest(parseFloat($("simRange").value));
+
+    $("unitLabel").textContent = unit;
+    $("calText").textContent = calPoints.length >= 2
+      ? "Calibrated (" + calPoints.length + " pts)" : "Not calibrated";
+    $("rawText").textContent = "raw force: " + (rawNow == null ? "–" : rawNow.toFixed(4));
+
+    let stable = false;
+    if (history.length >= 15) {
+      const m = history.reduce((a, b) => a + b, 0) / history.length;
+      const sd = Math.sqrt(history.reduce((a, b) => a + (b - m) ** 2, 0) / history.length);
+      stable = sd < 0.002;
+    }
+    $("stableDot").classList.toggle("on", stable);
+    $("stableText").textContent = rawNow == null ? "No load" : stable ? "Stable" : "Settling…";
+
+    let text = "----";
+    if (rawNow != null) {
+      const g = rawToGrams(rawNow);
+      if (g == null) text = "CAL";
+      else {
+        let net = g - tareGrams;
+        if (Math.abs(net) < 0.005) net = 0;
+        text = (net * UNITS[unit]).toFixed(2);
+      }
+    }
+    $("value").textContent = text;
+    $("padText").style.display = rawNow == null && !simMode ? "" : "none";
+
+    // support detection
+    const sb = $("supportBanner");
+    if (!simMode && forceSamples > 20 && !sawRealForce) {
+      sb.innerHTML = "<b>This device isn't reporting touch pressure.</b> Weighing needs a pressure-sensing screen " +
+        "(iPhone 6s – XS with 3D Touch in Safari, or a Mac Force Touch trackpad in Safari). " +
+        "Turn on Simulation mode to try the interface.";
+      sb.classList.add("show");
+    } else sb.classList.remove("show");
+
+    requestAnimationFrame(render);
+  }
+
+  load();
+  $("unitSel").value = unit;
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

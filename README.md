@@ -1,6 +1,6 @@
-# 🎈 Blank app template
+# ⚖️ Screen Scale
 
-A simple Streamlit app template for you to modify!
+Turns a pressure-sensing touchscreen into a scale that displays to 0.01 g. Supported devices: 3D Touch iPhones (6s–XS) or a Mac Force Touch trackpad, in Safari. See the in-app accuracy notes.
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
 
