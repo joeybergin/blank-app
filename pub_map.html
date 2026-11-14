@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>
+  :root {
+    --bg: #fbf7f0;
+    --panel: #ffffff;
+    --ink: #2b2118;
+    --muted: #7a6a5a;
+    --line: #eadfce;
+    --amber: #d98e04;
+    --amber-dark: #a86a00;
+    --sports: #2f7d4f;
+    --food: #c2502a;
+    --beer: #c98a00;
+    --unknown: #9a8f84;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  #app { display: flex; height: 100%; gap: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  #map { flex: 1 1 auto; min-width: 0; position: relative; }
+  #side { width: 300px; flex: 0 0 300px; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  #side header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  #side header h3 { margin: 0; font-size: 15px; }
+  #side header p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  #list { overflow-y: auto; flex: 1; margin: 0; padding: 0; list-style: none; }
+  #list li { padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  #list li:hover { background: #fdf3e2; }
+  #list li.active { background: #fbe6bf; }
+  #list .name { font-weight: 600; font-size: 14px; }
+  #list .dist { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #list .dots { display: flex; gap: 3px; margin-top: 4px; }
+  #list .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--unknown); opacity: .35; }
+  #list .dot.on.sports { background: var(--sports); opacity: 1; }
+  #list .dot.on.food { background: var(--food); opacity: 1; }
+  #list .dot.on.beer { background: var(--beer); opacity: 1; }
+
+  #details { border-top: 1px solid var(--line); padding: 12px 14px; font-size: 13px; max-height: 45%; overflow-y: auto; display: none; }
+  #details.show { display: block; }
+  #details h4 { margin: 0 0 6px; font-size: 15px; }
+  #details .row { margin: 6px 0; }
+  #details .label { font-weight: 600; }
+  #details a { color: var(--amber-dark); }
+
+  #status { position: absolute; z-index: 1000; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(43,33,24,.88); color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 13px; pointer-events: none; transition: opacity .3s; max-width: 90%; text-align: center; }
+  #status.hide { opacity: 0; }
+  #banner { position: absolute; z-index: 1000; bottom: 24px; left: 10px; right: 10px; background: #fff4d6; border: 1px solid #f0d58a; color: #6b4b00; padding: 8px 12px; border-radius: 8px; font-size: 12px; display: none; }
+  #banner.show { display: block; }
+
+  /* Pub markers */
+  .pub-icon { background: none; border: none; }
+  .pub-pin { width: 30px; height: 30px; border-radius: 50%; background: var(--amber); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35); display: grid; place-items: center; font-size: 16px; transition: transform .35s cubic-bezier(.34,1.56,.64,1), background .2s; transform-origin: center; cursor: pointer; }
+  .pub-pin:hover { transform: scale(1.15); }
+  .pub-pin.selected { transform: scale(2.1); background: var(--amber-dark); box-shadow: 0 0 0 6px rgba(217,142,4,.25), 0 4px 14px rgba(0,0,0,.4); }
+  .pub-pin.dim { opacity: .45; }
+  .me-dot { width: 16px; height: 16px; border-radius: 50%; background: #2a6fdb; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(42,111,219,.25); }
+
+  /* Bubbles around the selected pub */
+  .bubble-layer { background: none; border: none; pointer-events: none; }
+  .bubble-wrap { position: relative; width: 0; height: 0; }
+  .bubble { position: absolute; width: 132px; min-height: 132px; margin-left: -66px; margin-top: -66px; border-radius: 50%; padding: 18px 14px; color: #fff; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 6px 18px rgba(0,0,0,.28); border: 3px solid rgba(255,255,255,.9); transform: translate(0,0) scale(0); opacity: 0; transition: transform .5s cubic-bezier(.34,1.56,.64,1), opacity .3s; pointer-events: auto; }
+  .bubble.show { opacity: 1; }
+  .bubble .b-icon { font-size: 22px; line-height: 1; }
+  .bubble .b-title { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin: 4px 0 3px; }
+  .bubble .b-text { font-size: 11.5px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .bubble.sports { background: var(--sports); }
+  .bubble.food { background: var(--food); }
+  .bubble.beer { background: var(--beer); }
+  .bubble.unknown { filter: saturate(.25) brightness(1.05); }
+  .bubble .b-tail { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: inherit; }
+
+  .bubble-name { position: absolute; transform: translateX(-50%); white-space: nowrap; background: #2b2118; color: #fff; font-weight: 700; font-size: 13px; padding: 4px 10px; border-radius: 999px; box-shadow: 0 2px 6px rgba(0,0,0,.3); opacity: 0; transition: opacity .3s .15s; }
+  .bubble-name.show { opacity: 1; }
+
+  .locate-btn { background: #fff; border: none; width: 34px; height: 34px; font-size: 18px; cursor: pointer; }
+
+  @media (max-width: 720px) {
+    #app { flex-direction: column; }
+    #side { width: 100%; flex: 0 0 38%; border-left: none; border-top: 1px solid var(--line); }
+    .bubble { width: 104px; min-height: 104px; margin-left: -52px; margin-top: -52px; padding: 12px 10px; }
+    .bubble .b-text { -webkit-line-clamp: 3; font-size: 10.5px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map">
+    <div id="status">Finding your location…</div>
+    <div id="banner"></div>
+  </div>
+  <aside id="side">
+    <header>
+      <h3 id="count">Pubs near you</h3>
+      <p>Tap a pub to see sport, food &amp; beer info</p>
+    </header>
+    <ul id="list"></ul>
+    <div id="details"></div>
+  </aside>
+</div>
+
+<script>
+const CONFIG = __CONFIG__;
+
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
+const FALLBACK_CENTER = { lat: 51.5074, lon: -0.1278, label: "London (default)" };
+
+const statusEl = document.getElementById("status");
+const bannerEl = document.getElementById("banner");
+const listEl = document.getElementById("list");
+const detailsEl = document.getElementById("details");
+const countEl = document.getElementById("count");
+
+function setStatus(msg) {
+  statusEl.textContent = msg;
+  statusEl.classList.toggle("hide", !msg);
+}
+function setBanner(msg) {
+  bannerEl.textContent = msg || "";
+  bannerEl.classList.toggle("show", !!msg);
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function splitList(v) {
+  return String(v || "").split(";").map(s => s.trim()).filter(Boolean);
+}
+function titleCase(s) {
+  return s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+function haversine(a, b) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function fmtDist(m) {
+  return CONFIG.units === "miles"
+    ? (m / 1609.34 < 0.1 ? Math.round(m * 1.09361) + " yd" : (m / 1609.34).toFixed(1) + " mi")
+    : (m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(1) + " km");
+}
+
+/* ---------- Turn OpenStreetMap tags into the three bubble summaries ---------- */
+function sportsInfo(t) {
+  const items = [];
+  const sports = splitList(t.sport).map(titleCase);
+  if (sports.length) items.push("Shows " + sports.join(", "));
+  if (t.bar === "sports" || /sports?\s*(bar|pub)/i.test(t.name || "")) items.push("Sports bar");
+  if (t.television === "yes" || t.tv === "yes") items.push("TV screens");
+  if (t["screen"] === "yes" || t["projector"] === "yes") items.push("Big screen");
+  if (items.length) return { state: "yes", text: items.join(" · ") };
+  if (t.television === "no" || t.tv === "no") return { state: "no", text: "No TVs — a quiet pub" };
+  return { state: "unknown", text: "No sports info listed yet" };
+}
+function foodInfo(t) {
+  const items = [];
+  const cuisine = splitList(t.cuisine).map(titleCase);
+  const servesFood = t.food === "yes" || t.kitchen === "yes" || cuisine.length || t["opening_hours:kitchen"];
+  if (t.food === "no" || t.kitchen === "no") return { state: "no", text: "No food served" };
+  if (cuisine.length) items.push(cuisine.join(", "));
+  if (t["opening_hours:kitchen"]) items.push("Kitchen: " + t["opening_hours:kitchen"]);
+  const diets = ["vegetarian", "vegan", "gluten_free"].filter(d => ["yes", "only"].includes(t["diet:" + d])).map(titleCase);
+  if (diets.length) items.push(diets.join(", ") + " options");
+  if (servesFood) return { state: "yes", text: items.length ? items.join(" · ") : "Food served" };
+  return { state: "unknown", text: "Food service not listed yet" };
+}
+function beerInfo(t) {
+  const items = [];
+  const breweries = splitList(t.brewery || t["brewery:note"]);
+  if (breweries.length) items.push(breweries.slice(0, 6).join(", ") + (breweries.length > 6 ? " +" + (breweries.length - 6) + " more" : ""));
+  if (t.real_ale === "yes") items.push("Real ale");
+  if (t["drink:craft_beer"] === "yes" || t.craft_beer === "yes") items.push("Craft beer");
+  if (t.microbrewery === "yes") items.push("Brewed on site");
+  if (t.real_cider === "yes" || t["drink:cider"] === "yes") items.push("Cider");
+  if (items.length) return { state: "yes", text: items.join(" · ") };
+  if (t.real_ale === "no") return { state: "unknown", text: "Keg beers (no real ale)" };
+  return { state: "unknown", text: "Draft list not listed yet" };
+}
+
+function toPub(el) {
+  const t = el.tags || {};
+  const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+  if (lat == null || lon == null) return null;
+  const addr = [t["addr:housenumber"], t["addr:street"], t["addr:city"] || t["addr:town"], t["addr:postcode"]].filter(Boolean).join(" ");
+  return {
+    id: el.type + "/" + el.id,
+    name: t.name || (t.amenity === "bar" ? "Unnamed bar" : "Unnamed pub"),
+    lat, lon, tags: t, addr,
+    sports: sportsInfo(t), food: foodInfo(t), beer: beerInfo(t),
+  };
+}
+
+/* ---------- Data fetching ---------- */
+async function geocode(q) {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q);
+  const r = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!r.ok) throw new Error("Geocoding failed");
+  const j = await r.json();
+  if (!j.length) throw new Error("Couldn't find “" + q + "”");
+  return { lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name.split(",").slice(0, 2).join(",") };
+}
+function browserLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Location isn't available in this browser"));
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, label: "your location", isMe: true }),
+      e => reject(new Error(e.code === 1 ? "Location permission denied" : "Couldn't get your location")),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    );
+  });
+}
+async function fetchPubs(c, radius) {
+  const kinds = CONFIG.includeBars ? "^(pub|bar|biergarten)$" : "^(pub)$";
+  const q = `[out:json][timeout:25];(node["amenity"~"${kinds}"](around:${radius},${c.lat},${c.lon});way["amenity"~"${kinds}"](around:${radius},${c.lat},${c.lon}););out center tags;`;
+  let lastErr;
+  for (const ep of OVERPASS_ENDPOINTS) {
+    try {
+      const r = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      return j.elements.map(toPub).filter(Boolean);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("Overpass unavailable");
+}
+
+/* Clearly-labelled sample pubs, used only if OpenStreetMap can't be reached. */
+function samplePubs(c) {
+  const s = [
+    ["The Red Lion (sample)", { sport: "soccer;rugby", television: "yes", food: "yes", cuisine: "british;burger", brewery: "Fuller's;Timothy Taylor;Guinness", real_ale: "yes" }],
+    ["The Crown & Anchor (sample)", { food: "yes", "opening_hours:kitchen": "Mo-Su 12:00-21:00", "diet:vegetarian": "yes", real_ale: "yes", brewery: "Adnams;St Austell" }],
+    ["The Kings Head (sample)", { bar: "sports", sport: "soccer;cricket;darts", television: "yes", brewery: "Carling;Peroni" }],
+    ["The Plough (sample)", { television: "no", food: "yes", cuisine: "pizza", "drink:craft_beer": "yes", brewery: "BrewDog;Camden Town;Beavertown" }],
+    ["The White Hart (sample)", {}],
+    ["The Rose & Crown (sample)", { sport: "rugby", television: "yes", food: "no", real_cider: "yes", brewery: "Greene King" }],
+  ];
+  return s.map(([name, tags], i) => {
+    const ang = (i / s.length) * 2 * Math.PI, d = 0.004 + (i % 3) * 0.003;
+    return toPub({ type: "node", id: i, lat: c.lat + d * Math.sin(ang), lon: c.lon + d * 1.5 * Math.cos(ang), tags: { name, amenity: "pub", ...tags } });
+  });
+}
+
+/* ---------- Map ---------- */
+const map = L.map("map", { zoomControl: true }).setView([FALLBACK_CENTER.lat, FALLBACK_CENTER.lon], 14);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+  maxZoom: 20, subdomains: "abcd",
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>',
+}).addTo(map);
+
+const Locate = L.Control.extend({
+  options: { position: "topleft" },
+  onAdd() {
+    const b = L.DomUtil.create("button", "leaflet-bar locate-btn");
+    b.title = "Use my location"; b.textContent = "◎";
+    L.DomEvent.on(b, "click", e => { L.DomEvent.stop(e); start({ forceGeo: true }); });
+    return b;
+  },
+});
+map.addControl(new Locate());
+
+let pubs = [], markers = new Map(), selectedId = null, bubbleMarker = null, meMarker = null, radiusCircle = null, center = null;
+
+function pinIcon(selected) {
+  return L.divIcon({ className: "pub-icon", html: `<div class="pub-pin${selected ? " selected" : ""}">🍺</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+}
+
+function bubbleHtml(p) {
+  const cats = [
+    { key: "sports", icon: "⚽", title: "Sports games", info: p.sports, angle: -90 },
+    { key: "food", icon: "🍔", title: "Food service", info: p.food, angle: 30 },
+    { key: "beer", icon: "🍺", title: "Beers on draft", info: p.beer, angle: 150 },
+  ];
+  const small = window.innerWidth <= 720, r = small ? 92 : 112, half = small ? 52 : 66;
+  return `<div class="bubble-wrap">
+    ${cats.map((c, i) => {
+      const x = Math.round(r * Math.cos(c.angle * Math.PI / 180)), y = Math.round(r * Math.sin(c.angle * Math.PI / 180));
+      return `<div class="bubble ${c.key} ${c.info.state !== "yes" ? "unknown" : ""}" data-x="${x}" data-y="${y}" style="transition-delay:${i * 90}ms" title="${esc(c.info.text)}">
+        <div class="b-icon">${c.info.state === "no" ? "🚫" : c.icon}</div>
+        <div class="b-title">${c.title}</div>
+        <div class="b-text">${esc(c.info.text)}</div>
+      </div>`;
+    }).join("")}
+    <div class="bubble-name" style="top:${-(r + half + 34)}px">${esc(p.name)}</div>
+  </div>`;
+}
+
+function select(id, { pan = true } = {}) {
+  if (bubbleMarker) { map.removeLayer(bubbleMarker); bubbleMarker = null; }
+  if (selectedId && markers.has(selectedId)) markers.get(selectedId).setIcon(pinIcon(false)).setZIndexOffset(0);
+  document.querySelectorAll(".pub-pin").forEach(el => el.classList.remove("dim"));
+  selectedId = id;
+  document.querySelectorAll("#list li").forEach(li => li.classList.toggle("active", li.dataset.id === id));
+  if (!id) { detailsEl.classList.remove("show"); return; }
+
+  const p = pubs.find(x => x.id === id);
+  const m = markers.get(id);
+  m.setIcon(pinIcon(true)).setZIndexOffset(1000);
+  document.querySelectorAll(".pub-pin:not(.selected)").forEach(el => el.classList.add("dim"));
+
+  if (pan) map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16), { duration: 0.6 });
+
+  bubbleMarker = L.marker([p.lat, p.lon], {
+    icon: L.divIcon({ className: "bubble-layer", html: bubbleHtml(p), iconSize: [0, 0] }),
+    interactive: false, zIndexOffset: 2000, keyboard: false,
+  }).addTo(map);
+  // Animate the bubbles outward from the pub on the next frame.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const el = bubbleMarker && bubbleMarker.getElement();
+    if (!el) return;
+    el.querySelectorAll(".bubble").forEach(b => {
+      b.classList.add("show");
+      b.style.transform = `translate(${b.dataset.x}px, ${b.dataset.y}px) scale(1)`;
+    });
+    el.querySelector(".bubble-name").classList.add("show");
+  }));
+
+  renderDetails(p);
+  const li = listEl.querySelector(`li[data-id="${CSS.escape(id)}"]`);
+  if (li) li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function renderDetails(p) {
+  const t = p.tags;
+  const link = t.website || t["contact:website"];
+  const phone = t.phone || t["contact:phone"];
+  const row = (label, v) => v ? `<div class="row"><span class="label">${label}:</span> ${v}</div>` : "";
+  detailsEl.innerHTML = `
+    <h4>${esc(p.name)}</h4>
+    ${row("⚽ Sports", esc(p.sports.text))}
+    ${row("🍔 Food", esc(p.food.text))}
+    ${row("🍺 Draft", esc(p.beer.text))}
+    ${row("Address", esc(p.addr))}
+    ${row("Hours", esc(t.opening_hours))}
+    ${row("Phone", phone ? `<a href="tel:${esc(phone)}">${esc(phone)}</a>` : "")}
+    ${row("Web", link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, ""))}</a>` : "")}
+    <div class="row"><a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}" target="_blank" rel="noopener">Directions ↗</a>
+    ${p.id.startsWith("node/") || p.id.startsWith("way/") ? ` · <a href="https://www.openstreetmap.org/${p.id}" target="_blank" rel="noopener">Missing info? Add it on OpenStreetMap ↗</a>` : ""}</div>`;
+  detailsEl.classList.add("show");
+}
+
+function render() {
+  markers.forEach(m => map.removeLayer(m));
+  markers.clear();
+  listEl.innerHTML = "";
+  pubs.forEach(p => { p.dist = haversine(center, p); });
+  pubs.sort((a, b) => a.dist - b.dist);
+
+  pubs.forEach(p => {
+    const m = L.marker([p.lat, p.lon], { icon: pinIcon(false), title: p.name, riseOnHover: true })
+      .on("click", e => { L.DomEvent.stopPropagation(e); select(p.id); })
+      .addTo(map);
+    markers.set(p.id, m);
+
+    const li = document.createElement("li");
+    li.dataset.id = p.id;
+    const dot = (k) => `<span class="dot ${k} ${p[k].state === "yes" ? "on" : ""}" title="${k}"></span>`;
+    li.innerHTML = `<div><div class="name">${esc(p.name)}</div><div class="dots">${dot("sports")}${dot("food")}${dot("beer")}</div></div><div class="dist">${fmtDist(p.dist)}</div>`;
+    li.onclick = () => select(p.id);
+    listEl.appendChild(li);
+  });
+
+  countEl.textContent = `${pubs.length} pub${pubs.length === 1 ? "" : "s"} near ${center.label}`;
+  if (!pubs.length) listEl.innerHTML = `<li style="cursor:default;color:var(--muted)">No pubs found — try a larger search radius.</li>`;
+}
+
+map.on("click", () => select(null));
+
+async function start({ forceGeo = false } = {}) {
+  select(null);
+  setBanner("");
+  try {
+    if (CONFIG.query && !forceGeo) {
+      setStatus("Looking up " + CONFIG.query + "…");
+      center = await geocode(CONFIG.query);
+    } else {
+      setStatus("Finding your location…");
+      center = await browserLocation();
+    }
+  } catch (e) {
+    center = FALLBACK_CENTER;
+    setBanner(e.message + ". Showing " + FALLBACK_CENTER.label + " — type a town or postcode in the sidebar instead.");
+  }
+
+  map.setView([center.lat, center.lon], 15);
+  if (meMarker) map.removeLayer(meMarker);
+  if (radiusCircle) map.removeLayer(radiusCircle);
+  meMarker = L.marker([center.lat, center.lon], {
+    icon: L.divIcon({ className: "", html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }),
+    title: center.label, interactive: false,
+  }).addTo(map);
+  radiusCircle = L.circle([center.lat, center.lon], { radius: CONFIG.radius, color: "#d98e04", weight: 1, fillOpacity: 0.04, interactive: false }).addTo(map);
+
+  setStatus("Finding pubs nearby…");
+  try {
+    pubs = await fetchPubs(center, CONFIG.radius);
+  } catch (e) {
+    pubs = samplePubs(center);
+    setBanner("Couldn't reach OpenStreetMap right now, so these are SAMPLE pubs to show how the app works. Try again in a minute.");
+  }
+  render();
+  if (pubs.length) map.fitBounds(radiusCircle.getBounds(), { padding: [10, 10] });
+  setStatus("");
+}
+
+start();
+</script>
+</body>
+</html>
