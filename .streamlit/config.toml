@@ -1,0 +1,10 @@
+[theme]
+base = "light"
+primaryColor = "#0033A0"
+backgroundColor = "#f4f6fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1a1a1a"
+font = "Montserrat:https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap"
+
+[client]
+toolbarMode = "minimal"
